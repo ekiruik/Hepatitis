@@ -394,7 +394,7 @@ var DATA_MIN_DATE = "2026-09-07", DATA_MAX_DATE = "2026-09-18";
 // IMPORTANT: publishing to the web makes that sheet's data (participant names, phone
 // numbers, test results) fetchable by anyone who has this link, independent of GitHub's
 // own access controls. Leave this blank to keep the dashboard on manual CSV import only.
-var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJMvqklqKFGUi90mqv9WqXIDrmN0l1U7PvwcolwDz28t9wNwAGHAdJca87MTyDGG7LUxSm/pub?gid=1651798738&single=true&output=csv";
+var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJMvqklqKFGUi90mqv9WqXIDrmN0l1U7PvwcolwDz28t9wNwAGHAdJca87MTyDGG7LUxSm/pub?gid=1783580920&single=true&output=csv";
 
 (function(){
   var svgNS = "http://www.w3.org/2000/svg";
@@ -408,7 +408,25 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
   function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function pct(n, d){ return d > 0 ? (n / d * 100) : 0; }
   function fmtPct(n, d){ return d > 0 ? pct(n,d).toFixed(1) + '%' : '\u2014'; }
-  function clearSvg(svg){ while (svg.firstChild) svg.removeChild(svg.firstChild); }
+  function clearSvg(svg){ if (!svg) return; while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+  // Shows/hides an SVG chart's "no data" placeholder without ever removing the <svg> element
+  // itself from the DOM (destroying it via wrap.innerHTML would make every later getElementById
+  // lookup for that chart return null and crash the next render).
+  function setChartEmpty(svg, wrap, isEmpty){
+    svg.style.display = isEmpty ? 'none' : '';
+    var note = wrap.querySelector('.empty-note');
+    if (isEmpty){
+      if (!note){
+        note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'No records in the selected date range.';
+        wrap.appendChild(note);
+      }
+    } else if (note){
+      note.remove();
+    }
+  }
 
   var RISK_TOKENS = [
     {key:"unknown_partner_status", label:"Unknown partner Hep status", full:"Unknown partner Hep status"},
@@ -493,8 +511,8 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     var svg = document.getElementById('countyChart');
     var wrap = document.getElementById('countyChartWrap');
     clearSvg(svg);
-    if (a.n === 0){ wrap.innerHTML = '<div class="empty-note">No records in the selected date range.</div>'; return; }
-    if (!svg.isConnected) { wrap.innerHTML=''; wrap.appendChild(svg); }
+    setChartEmpty(svg, wrap, a.n === 0);
+    if (a.n === 0) return;
 
     var W = 560, H = 250, padL = 40, padR = 14, padT = 14, padB = 50;
     var plotW = W - padL - padR, plotH = H - padT - padB;
@@ -560,8 +578,8 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     var svg = document.getElementById('riskChart');
     var wrap = document.getElementById('riskChartWrap');
     clearSvg(svg);
-    if (a.n === 0){ wrap.innerHTML = '<div class="empty-note">No records in the selected date range.</div>'; return; }
-    if (!svg.isConnected) { wrap.innerHTML=''; wrap.appendChild(svg); }
+    setChartEmpty(svg, wrap, a.n === 0);
+    if (a.n === 0) return;
 
     var data = a.risk.slice().sort(function(x,y){ return y.n - x.n; });
     var W = 560, H = 270, padL = 178, padR = 58, padT = 6, padB = 6;
