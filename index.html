@@ -856,7 +856,6 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     submission_date: 'SubmissionDate',
     review_state: 'ReviewState',
     county: 'form_body-participant_info-county',
-    facility: 'form_body-participant_info-facility_name',
     facility_mfl_code: 'form_body-participant_info-facility_mfl_code',
     facility_other_mfl_code: 'form_body-participant_info-facility_other_mfl_code',
     gender: 'form_body-participant_info-gender',
@@ -920,64 +919,8 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     return { historyOnly: historyOnly, labOnly: labOnly };
   }
 
-  // The facility is a standardized place (identified by its Master Facility List code), but the
-  // form's free-typed facility_name field is not -- the same MFL code shows up spelled "Witu",
-  // "witu", "Witu Hospital", "Witu hospital" and (typo) "Wutu Hospital" across different
-  // submissions. To keep the facility list to one entry per real facility, every row is first
-  // grouped by its MFL code (falling back to the "other facility" code, then to the lowercased
-  // name itself when neither code is present); within that group, spellings are further pooled
-  // case-insensitively to find the dominant wording (so "Witu" and "witu" combine against
-  // "Wutu Hospital" rather than splitting the vote), and a normally-cased spelling from that
-  // dominant pool is preferred over an ALL CAPS or all-lowercase one for the on-screen label.
-  function canonicalFacilityNames(rows){
-    var groupCounts = {};
-    rows.forEach(function(o){
-      var rawName = (o[ODK_COLUMNS.facility] || '').trim();
-      if (!rawName) return;
-      var mflCode = (o[ODK_COLUMNS.facility_mfl_code] || '').trim();
-      var otherCode = (o[ODK_COLUMNS.facility_other_mfl_code] || '').trim();
-      var groupKey = mflCode ? 'MFL:' + mflCode : (otherCode ? 'OTHER:' + otherCode : 'NAME:' + rawName.toLowerCase());
-      if (!groupCounts[groupKey]) groupCounts[groupKey] = {};
-      groupCounts[groupKey][rawName] = (groupCounts[groupKey][rawName] || 0) + 1;
-    });
-    var canonicalByGroup = {};
-    Object.keys(groupCounts).forEach(function(groupKey){
-      var counts = groupCounts[groupKey];
-      // Pool spellings case-insensitively to find which wording is actually most common.
-      var lowerTotals = {};
-      Object.keys(counts).forEach(function(name){
-        var lower = name.toLowerCase();
-        lowerTotals[lower] = (lowerTotals[lower] || 0) + counts[name];
-      });
-      var bestLower = null, bestLowerCount = -1;
-      Object.keys(lowerTotals).forEach(function(lower){
-        if (lowerTotals[lower] > bestLowerCount){ bestLower = lower; bestLowerCount = lowerTotals[lower]; }
-      });
-      // Among the raw spellings that make up that dominant wording, prefer one that isn't ALL
-      // CAPS or all-lowercase (reads better in the dropdown); fall back to the most frequent
-      // raw spelling if every variant is all-caps or all-lowercase.
-      var pool = Object.keys(counts).filter(function(name){ return name.toLowerCase() === bestLower; });
-      var niceCased = pool.filter(function(name){ return name !== name.toLowerCase() && name !== name.toUpperCase(); });
-      var candidates = niceCased.length ? niceCased : pool;
-      var bestName = null, bestCount = -1;
-      candidates.forEach(function(name){
-        if (counts[name] > bestCount){ bestName = name; bestCount = counts[name]; }
-      });
-      canonicalByGroup[groupKey] = bestName;
-    });
-    return function(o){
-      var rawName = (o[ODK_COLUMNS.facility] || '').trim();
-      if (!rawName) return '';
-      var mflCode = (o[ODK_COLUMNS.facility_mfl_code] || '').trim();
-      var otherCode = (o[ODK_COLUMNS.facility_other_mfl_code] || '').trim();
-      var groupKey = mflCode ? 'MFL:' + mflCode : (otherCode ? 'OTHER:' + otherCode : 'NAME:' + rawName.toLowerCase());
-      return canonicalByGroup[groupKey] || rawName;
-    };
-  }
-
   function odkRowsToRecords(objRows){
     var out = [];
-    var facilityNameFor = canonicalFacilityNames(objRows);
     objRows.forEach(function(o){
       if ((o[ODK_COLUMNS.review_state] || '').trim().toLowerCase() === 'rejected') return;
       // 'Match_Status' only appears once the history-taking and lab-testing forms have been
@@ -999,7 +942,7 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
       out.push({
         submission_date: submission_date,
         county: COUNTY_LABELS[countyRaw] || o[ODK_COLUMNS.county] || '',
-        facility: facilityNameFor(o),
+        facility: (o[ODK_COLUMNS.facility_mfl_code] || '').trim() || (o[ODK_COLUMNS.facility_other_mfl_code] || '').trim(),
         gender: (o[ODK_COLUMNS.gender] || '').trim().toLowerCase(),
         hepb_result: hepb_result,
         hepc_result: hepc_result,
@@ -1015,22 +958,22 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     return out;
   }
 
-  // Facility names are free-typed on the form (not a fixed list like county), so the dropdown's
-  // options have to be rebuilt from whatever facilities actually show up in the data. Dedupes
-  // case-insensitively (typos like "Coast General" vs "coast general" collapse to one entry) and
-  // keeps the option list sorted for easy scanning.
+  // Facility is keyed by the standardized Master Facility List code (facility_mfl_code, or
+  // facility_other_mfl_code for a facility entered as "other" / not in the master list) rather
+  // than the free-typed facility name field, which has inconsistent spellings for the same
+  // facility. The dropdown's options are rebuilt from whichever codes actually show up in the
+  // data, sorted for easy scanning.
   function populateFacilityFilter(records){
     var seen = {};
     var names = [];
     records.forEach(function(r){
       var name = (r.facility || '').trim();
       if (!name) return;
-      var key = name.toLowerCase();
-      if (seen[key]) return;
-      seen[key] = true;
+      if (seen[name]) return;
+      seen[name] = true;
       names.push(name);
     });
-    names.sort(function(a, b){ return a.localeCompare(b); });
+    names.sort(function(a, b){ return a.localeCompare(b, undefined, {numeric: true}); });
     var sel = document.getElementById('facilityFilter');
     var current = sel.value;
     sel.innerHTML = '<option value="all">All facilities</option>' +
