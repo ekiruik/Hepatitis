@@ -396,28 +396,11 @@
 var RECORDS = [];
 var DATA_MIN_DATE = "2026-09-07", DATA_MAX_DATE = "2026-09-18";
 
-// Auto-sync via the Google Sheets API v4 (replaces the old "File > Publish to web" CSV export,
-// which is fragile -- it silently breaks whenever the sheet is unpublished, republished, or the
-// tab is restructured, with no visible error until someone notices the dashboard has gone stale).
-//
-// SETUP (one time):
-//   1. In the Google Sheet's URL (https://docs.google.com/spreadsheets/d/XXXXXXXX/edit#gid=...),
-//      copy the XXXXXXXX part into SHEET_SPREADSHEET_ID below. This is NOT the same ID as an old
-//      "publish to web" link (those use a different /d/e/2PACX-.../pub format) -- it has to be the
-//      plain ID from the normal edit URL.
-//   2. Share the sheet so it's readable by API key: File > Share > General access > "Anyone with
-//      the link" > Viewer. (This is the same level of exposure the old published-CSV link already
-//      had -- anyone with the link, or who gets hold of the API key below, can read the data. It
-//      is NOT a substitute for controlling who receives the dashboard link. For real per-person
-//      access control, this would need to be switched to OAuth sign-in instead of an API key.)
-//   3. In Google Cloud Console: create/select a project, enable the "Google Sheets API", then
-//      Credentials > Create Credentials > API key. Restrict it to the Sheets API only, and add an
-//      HTTP referrer restriction for this dashboard's domain, so the key can't be reused elsewhere
-//      if someone copies it out of the page source.
-//   4. Paste the spreadsheet ID and API key below.
-var SHEET_SPREADSHEET_ID = "PASTE_YOUR_SPREADSHEET_ID_HERE";
-var SHEET_TAB_NAME = "ODK Submissions"; // must match CONFIG.MERGED_SHEET_NAME in ODK_Sync.gs
-var SHEET_API_KEY = "PASTE_YOUR_GOOGLE_SHEETS_API_KEY_HERE";
+// Auto-sync from the published Google Sheet CSV export (File > Share > Publish to web, CSV format,
+// for the merged submissions tab). NOTE: publishing to the web makes that sheet's data (participant
+// names, phone numbers, test results) fetchable by anyone who has this link, independent of GitHub's
+// own access controls. Leave this blank to keep the dashboard on manual CSV import only.
+var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJMvqklqKFGUi90mqv9WqXIDrmN0l1U7PvwcolwDz28t9wNwAGHAdJca87MTyDGG7LUxSm/pub?gid=1783580920&single=true&output=csv";
 
 (function(){
   var svgNS = "http://www.w3.org/2000/svg";
@@ -887,21 +870,37 @@ var SHEET_API_KEY = "PASTE_YOUR_GOOGLE_SHEETS_API_KEY_HERE";
   };
   var COUNTY_LABELS = {mombasa:'Mombasa', lamu:'Lamu'};
 
-  // Turns the Sheets API's values.get response (an array of rows, each an array of cell strings --
-  // see https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/get) into
-  // the same array-of-{header: value} shape the rest of this file already works with. Google
-  // trims trailing blank cells off shorter rows, so a row is padded back out to the header count
-  // rather than assumed to line up positionally.
-  function sheetValuesToObjects(values){
-    if (!values || !values.length) return [];
-    var headers = values[0];
-    return values.slice(1)
-      .filter(function(r){ return r.length > 1 || (r[0] && String(r[0]).trim() !== ''); })
-      .map(function(r){
-        var o = {};
-        headers.forEach(function(h, idx){ o[h] = r[idx] !== undefined && r[idx] !== null ? String(r[idx]) : ''; });
-        return o;
-      });
+  function parseCSV(text){
+    var rows = [], row = [], field = '', inQuotes = false;
+    var i = 0, len = text.length;
+    while (i < len){
+      var ch = text.charAt(i);
+      if (inQuotes){
+        if (ch === '"'){
+          if (text.charAt(i+1) === '"'){ field += '"'; i += 2; continue; }
+          inQuotes = false; i++; continue;
+        }
+        field += ch; i++; continue;
+      }
+      if (ch === '"'){ inQuotes = true; i++; continue; }
+      if (ch === ','){ row.push(field); field = ''; i++; continue; }
+      if (ch === '\r'){ i++; continue; }
+      if (ch === '\n'){ row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+      field += ch; i++;
+    }
+    if (field.length || row.length){ row.push(field); rows.push(row); }
+    return rows;
+  }
+
+  function csvToObjects(text){
+    var rows = parseCSV(text).filter(function(r){ return r.length > 1 || (r[0] && r[0].trim() !== ''); });
+    if (!rows.length) return [];
+    var headers = rows[0];
+    return rows.slice(1).map(function(r){
+      var o = {};
+      headers.forEach(function(h, idx){ o[h] = r[idx] !== undefined ? r[idx] : ''; });
+      return o;
+    });
   }
 
   // The history-taking and lab-testing forms are two separate ODK submissions per participant,
@@ -1004,32 +1003,20 @@ var SHEET_API_KEY = "PASTE_YOUR_GOOGLE_SHEETS_API_KEY_HERE";
   // Runs once automatically on page load, and again whenever "Refresh" is clicked.
   function syncFromSheet(isManualClick){
     var statusEl = document.getElementById('importStatus');
-    if (!SHEET_SPREADSHEET_ID || SHEET_SPREADSHEET_ID.indexOf('PASTE_') === 0 ||
-        !SHEET_API_KEY || SHEET_API_KEY.indexOf('PASTE_') === 0){
+    if (!SHEET_CSV_URL){
       statusEl.className = 'warn';
-      statusEl.textContent = 'Google Sheet not configured yet \u2014 see SHEET_SPREADSHEET_ID / SHEET_API_KEY in the page source.';
+      statusEl.textContent = 'No Google Sheet link configured \u2014 see SHEET_CSV_URL in the page source.';
       return;
     }
     if (isManualClick){ statusEl.className = ''; statusEl.textContent = 'Syncing\u2026'; }
-    var apiUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(SHEET_SPREADSHEET_ID) +
-      '/values/' + encodeURIComponent(SHEET_TAB_NAME) + '?key=' + encodeURIComponent(SHEET_API_KEY) +
-      '&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING';
-    fetch(apiUrl, { cache: 'no-store' })
+    var bustUrl = SHEET_CSV_URL + (SHEET_CSV_URL.indexOf('?') === -1 ? '?' : '&') + 'cachebust=' + Date.now();
+    fetch(bustUrl, { cache: 'no-store' })
       .then(function(resp){
-        return resp.json().then(function(body){
-          if (!resp.ok){
-            // Google's error shape: { error: { code, message, status } }. Surface it directly --
-            // "PERMISSION_DENIED" usually means the sheet isn't shared "Anyone with the link", a
-            // 400 usually means SHEET_TAB_NAME doesn't match an actual tab, and a 404 usually
-            // means SHEET_SPREADSHEET_ID is wrong.
-            var apiMsg = (body && body.error && body.error.message) || ('HTTP ' + resp.status);
-            throw new Error(apiMsg);
-          }
-          return body;
-        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.text();
       })
-      .then(function(body){
-        var objRows = sheetValuesToObjects(body.values || []);
+      .then(function(text){
+        var objRows = csvToObjects(text);
         var imported = odkRowsToRecords(objRows);
         var now = new Date();
         var stamp = now.toLocaleDateString() + ' ' + now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
