@@ -261,9 +261,9 @@
       </select>
     </div>
     <div class="grp">
-      <label for="facilityFilter">Facility</label>
+      <label for="facilityFilter">MFL Code</label>
       <select id="facilityFilter">
-        <option value="all">All facilities</option>
+        <option value="all">All MFL codes</option>
       </select>
     </div>
     <button id="resetFilter">Reset filters</button>
@@ -858,6 +858,7 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     county: 'form_body-participant_info-county',
     facility_mfl_code: 'form_body-participant_info-facility_mfl_code',
     facility_other_mfl_code: 'form_body-participant_info-facility_other_mfl_code',
+    facility_name: 'form_body-participant_info-facility_name',
     gender: 'form_body-participant_info-gender',
     hepb_result: 'form_body-test_results-hepb_result',
     hepc_result: 'form_body-test_results-hepc_result',
@@ -943,6 +944,7 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
         submission_date: submission_date,
         county: COUNTY_LABELS[countyRaw] || o[ODK_COLUMNS.county] || '',
         facility: (o[ODK_COLUMNS.facility_mfl_code] || '').trim() || (o[ODK_COLUMNS.facility_other_mfl_code] || '').trim(),
+        facility_name_raw: (o[ODK_COLUMNS.facility_name] || '').trim(),
         gender: (o[ODK_COLUMNS.gender] || '').trim().toLowerCase(),
         hepb_result: hepb_result,
         hepc_result: hepc_result,
@@ -958,27 +960,64 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
     return out;
   }
 
-  // Facility is keyed by the standardized Master Facility List code (facility_mfl_code, or
-  // facility_other_mfl_code for a facility entered as "other" / not in the master list) rather
-  // than the free-typed facility name field, which has inconsistent spellings for the same
-  // facility. The dropdown's options are rebuilt from whichever codes actually show up in the
-  // data, sorted for easy scanning.
+  // Facility is keyed and filtered by the standardized Master Facility List code
+  // (facility_mfl_code, or facility_other_mfl_code for a facility entered as "other" / not in the
+  // master list) rather than the free-typed facility name field, which has inconsistent spellings
+  // for the same facility. A bare code isn't very readable on its own though, so each option's
+  // label pairs the code with the most common name typed against it (pooling spellings
+  // case-insensitively and preferring a normally-cased one over ALL CAPS/all-lowercase) -- purely
+  // for display; the option's value, and everything renderAll() filters on, stays the exact code.
   function populateFacilityFilter(records){
-    var seen = {};
-    var names = [];
+    var nameCounts = {};
     records.forEach(function(r){
-      var name = (r.facility || '').trim();
-      if (!name) return;
-      if (seen[name]) return;
-      seen[name] = true;
-      names.push(name);
+      var code = (r.facility || '').trim();
+      var name = (r.facility_name_raw || '').trim();
+      if (!code || !name) return;
+      if (!nameCounts[code]) nameCounts[code] = {};
+      nameCounts[code][name] = (nameCounts[code][name] || 0) + 1;
     });
-    names.sort(function(a, b){ return a.localeCompare(b, undefined, {numeric: true}); });
+    var labelFor = {};
+    Object.keys(nameCounts).forEach(function(code){
+      var counts = nameCounts[code];
+      var lowerTotals = {};
+      Object.keys(counts).forEach(function(name){
+        var lower = name.toLowerCase();
+        lowerTotals[lower] = (lowerTotals[lower] || 0) + counts[name];
+      });
+      var bestLower = null, bestLowerCount = -1;
+      Object.keys(lowerTotals).forEach(function(lower){
+        if (lowerTotals[lower] > bestLowerCount){ bestLower = lower; bestLowerCount = lowerTotals[lower]; }
+      });
+      var pool = Object.keys(counts).filter(function(name){ return name.toLowerCase() === bestLower; });
+      var niceCased = pool.filter(function(name){ return name !== name.toLowerCase() && name !== name.toUpperCase(); });
+      var candidates = niceCased.length ? niceCased : pool;
+      var bestName = null, bestCount = -1;
+      candidates.forEach(function(name){
+        if (counts[name] > bestCount){ bestName = name; bestCount = counts[name]; }
+      });
+      labelFor[code] = bestName;
+    });
+
+    var seen = {};
+    var codes = [];
+    records.forEach(function(r){
+      var code = (r.facility || '').trim();
+      if (!code || seen[code]) return;
+      seen[code] = true;
+      codes.push(code);
+    });
+    codes.sort(function(a, b){
+      var an = labelFor[a] || a, bn = labelFor[b] || b;
+      return an.localeCompare(bn, undefined, {numeric: true});
+    });
     var sel = document.getElementById('facilityFilter');
     var current = sel.value;
-    sel.innerHTML = '<option value="all">All facilities</option>' +
-      names.map(function(n){ return '<option value="' + n.replace(/"/g, '&quot;') + '">' + n + '</option>'; }).join('');
-    sel.value = names.indexOf(current) !== -1 ? current : 'all';
+    sel.innerHTML = '<option value="all">All MFL codes</option>' +
+      codes.map(function(code){
+        var label = labelFor[code] ? (code + ' — ' + labelFor[code]) : code;
+        return '<option value="' + code.replace(/"/g, '&quot;') + '">' + label.replace(/</g, '&lt;') + '</option>';
+      }).join('');
+    sel.value = codes.indexOf(current) !== -1 ? current : 'all';
   }
 
   // Shared by both the manual CSV import and the Google Sheet auto-sync: swaps in a new
