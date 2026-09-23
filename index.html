@@ -246,11 +246,11 @@
   <div class="filter-bar">
     <div class="grp">
       <label for="dateFrom">Date tested</label>
-      <input type="date" id="dateFrom" min="2026-09-07" max="2026-09-18" value="2026-09-07">
+      <input type="date" id="dateFrom" value="2026-09-07">
     </div>
     <span class="to">to</span>
     <div class="grp">
-      <input type="date" id="dateTo" min="2026-09-07" max="2026-09-18" value="2026-09-18">
+      <input type="date" id="dateTo" value="2026-09-18">
     </div>
     <div class="grp">
       <label for="countyFilter">County</label>
@@ -1021,16 +1021,14 @@ var SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwPFkkd3hJ
   }
 
   // Shared by both the manual CSV import and the Google Sheet auto-sync: swaps in a new
-  // set of records, refreshes the date-range filters to match, and re-renders.
+  // set of records, defaults the date-range filter to match, and re-renders. The date inputs are
+  // deliberately left without a min/max -- Elvis wants to be able to open the range beyond
+  // whatever dates happen to be in the data so far, not have it clamped to it.
   function applyRecords(imported, badgeText){
     RECORDS = imported;
     var dates = imported.map(function(r){ return r.submission_date; }).filter(Boolean).sort();
     DATA_MIN_DATE = dates[0];
     DATA_MAX_DATE = dates[dates.length - 1];
-    ['dateFrom', 'dateTo'].forEach(function(id){
-      var el = document.getElementById(id);
-      el.min = DATA_MIN_DATE; el.max = DATA_MAX_DATE;
-    });
     document.getElementById('dateFrom').value = DATA_MIN_DATE;
     document.getElementById('dateTo').value = DATA_MAX_DATE;
     document.getElementById('countyFilter').value = 'all';
